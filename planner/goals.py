@@ -271,7 +271,23 @@ def _extract_print_state_from_responses(resps: List) -> str:
         resp_type = str(getattr(resp, "response_type", "")).upper()
         if resp_type == "NOTE":
             try:
-                body = json.loads(getattr(resp, "response_body", "") or "{}")
+                #body = json.loads(getattr(resp, "response_body", "") or "{}")
+                raw_body = getattr(resp, "response_body", None)
+                if isinstance(raw_body, str):
+                    try:
+                        body = json.loads(raw_body or "{}")
+                    except Exception:
+                        body = {}
+                elif isinstance(raw_body, dict):
+                    body = raw_body
+                elif raw_body is not None:
+                    # New API: Pydantic object - extract fields directly
+                    body = {
+                        "kind": getattr(raw_body, "kind", ""),
+                        "message": getattr(raw_body, "message", ""),
+                    }
+                else:
+                    body = {}
             except Exception:
                 body = {}
             if isinstance(body, dict) and body.get("kind") == "writeln":
@@ -316,7 +332,20 @@ def _extract_print_state_from_responses(resps: List) -> str:
                     )
                     if not benign:
                         print(f"[DEBUG ERROR]: {text[:300]}")
-
+    if not llm_lines and not standard:
+        for resp in (resps or []):
+            body = getattr(resp, 'response_body', None)
+            if not hasattr(body, 'model_dump'):
+                continue
+            dump = body.model_dump()
+            for node in (dump.get('nodes') or []):
+                for msg in (node.get('messages') or []):
+                    if msg.get('kind') == 'writeln':
+                        text = str(msg.get('message', ''))
+                        if any(m in text for m in (_LLM_SUBGOAL_MARK, _LLM_SUBGOAL_RAW_MARK, _LLM_VARS_MARK, "[LLM_FIXES]")):
+                            llm_lines.append(text)
+                        elif not standard:
+                            standard = text
     # print(f"[DEBUG] Total writeln messages: {debug_writeln_count}, LLM markers found: {debug_llm_found}")
     return (standard + "\n" + "\n".join(llm_lines)) if (llm_lines and standard) else (standard or "\n".join(llm_lines))
 
@@ -331,11 +360,11 @@ def _print_state_before_hole(isabelle, session: str, full_text: str, hole_span: 
     proof_lines = lines[lemma_start:]
     try:
         thy = build_theory(_build_ml_prolog() + _inject_var_extraction(proof_lines), add_print_state=True, end_with="oops")
-        # if trace:
-        #     print("[DEBUG] Theory text being sent to Isabelle:")
-        #     print("=" * 60)
-        #     for i, ln in enumerate(thy.splitlines()[:30]):
-        #         print(f"{i:3d}: {ln}")
+        if trace:
+            print("[DEBUG] Theory text being sent to Isabelle:")
+            print("=" * 60)
+            for i, ln in enumerate(thy.splitlines()[:30]):
+                print(f"{i:3d}: {ln}")
         #     tl = thy.splitlines()
         #     if len(tl) > 40:
         #         print("  …")
@@ -343,6 +372,29 @@ def _print_state_before_hole(isabelle, session: str, full_text: str, hole_span: 
         #             print(f"{i:3d}: {ln}")
         #     print("=" * 60)
         resps = _run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_FAST_TIMEOUT_S)
+        """
+        if trace:
+            print(f"[DEBUG] Number of responses: {len(resps)}")
+            for i, r in enumerate(resps[:5]):
+                rtype = str(getattr(r, 'response_type', '?'))
+                body = getattr(r, 'response_body', None)
+                print(f"[DEBUG] Response {i}: type={rtype}, body_type={type(body).__name__}")
+                if 'FINISHED' in rtype and hasattr(body, 'model_dump'):
+                    dump = body.model_dump()
+                    print(f"[DEBUG] FINISHED dump: {str(dump)[:1000]}")
+                if hasattr(body, 'task'):
+                    print(f"[DEBUG]   task: {str(getattr(body, 'task', ''))[:200]}")
+                    print(f"[DEBUG]   all fields: {body.model_dump() if hasattr(body, 'model_dump') else 'N/A'}")
+                body = getattr(r, 'response_body', None)
+                print(f"[DEBUG] Response {i}: type={getattr(r, 'response_type', '?')}")
+                print(f"[DEBUG]   body type: {type(body).__name__}")
+                print(f"[DEBUG]   body attrs: {[a for a in dir(body) if not a.startswith('_')][:10]}")
+                if hasattr(body, 'message'):
+                    print(f"[DEBUG]   message: {str(getattr(body, 'message', ''))[:200]}")
+                if hasattr(body, 'kind'):
+                    print(f"[DEBUG]   kind: {getattr(body, 'kind', '')}")
+                # New API: extract messages from FINISHED response nodes
+        """
         state = _extract_print_state_from_responses(resps)
         # if trace:
         #     print(f"[DEBUG] State block contains [LLM_VARS]: {_LLM_VARS_MARK in state}")
