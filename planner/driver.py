@@ -14,6 +14,7 @@ from planner.skeleton import (
 from planner.repair import try_cegis_repairs, regenerate_whole_proof, _APPLY_OR_BY as _TACTIC_LINE_RE
 from prover.config import ISABELLE_SESSION
 from prover.isabelle_api import (
+    extract_session_id,
     build_theory, get_isabelle_client, last_print_state_block, start_isabelle_server,
 )
 from prover.prover import prove_goal
@@ -402,7 +403,7 @@ def plan_outline(goal: str, *, model: Optional[str] = None, outline_k: Optional[
     """Generate Isar outline with 'sorry' placeholders."""
     server_info, proc = start_isabelle_server(name="planner", log_file="logs/planner_ui.log")
     isa = get_isabelle_client(server_info)
-    session = isa.session_start(session=ISABELLE_SESSION)
+    session = extract_session_id(isa.session_start(session=ISABELLE_SESSION))
     
     try:
         if legacy_single_outline:
@@ -441,7 +442,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
 
     server_info, proc = start_isabelle_server(name="planner", log_file="logs/planner_ui.log")
     isa = get_isabelle_client(server_info)
-    session = isa.session_start(session=ISABELLE_SESSION)
+    session = extract_session_id(isa.session_start(session=ISABELLE_SESSION))
 
     t0 = time.monotonic()
     left_s = lambda: max(0.0, timeout - (time.monotonic() - t0))
@@ -464,7 +465,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
             pass
         server_info2, proc2 = start_isabelle_server(name="planner", log_file="logs/planner_ui.log")
         isa2 = get_isabelle_client(server_info2)
-        session2 = isa2.session_start(session=ISABELLE_SESSION)
+        session2 = extract_session_id(isa2.session_start(session=ISABELLE_SESSION))
         isa, session, proc = isa2, session2, proc2
 
     try:
