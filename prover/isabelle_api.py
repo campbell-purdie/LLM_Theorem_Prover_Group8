@@ -218,7 +218,12 @@ def finished_ok(resps: List[IsabelleResponse]) -> Tuple[bool, Dict[str, Any]]:
     for r in (resps or []):
         if _normalize_type(_get_field(r, ("response_type", "type", "kind", "tag", "name"))) != "FINISHED":
             continue
-        obj = _decode_body_to_dict(_get_field(r, ("response_body", "body", "message", "payload")))
+        raw = _get_field(r, ("response_body", "body", "message", "payload"))
+        # New API: Pydantic object
+        if hasattr(raw, "model_dump"):
+            obj = raw.model_dump()
+        else:
+            obj = _decode_body_to_dict(raw)
         if not isinstance(obj, dict):
             continue
         last_obj = obj  # track last FINISHED

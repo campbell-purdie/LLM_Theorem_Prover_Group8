@@ -40,7 +40,7 @@ def _normalize_response_type(rt: object) -> str:
         return ""
 
 def _decode_body(obj: object) -> Optional[dict]:
-    """Decode response_body which may be dict / JSON string / bytes."""
+    """Decode response_body which may be dict / JSON string / bytes / Pydantic object."""
     if obj is None:
         return None
     if isinstance(obj, dict):
@@ -55,13 +55,29 @@ def _decode_body(obj: object) -> Optional[dict]:
             return json.loads(obj)
         except Exception:
             return None
-    return None
+    # New API: Pydantic object - extract fields directly
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    # Fallback: try attribute access
+    return {
+        "kind": getattr(obj, "kind", ""),
+        "message": getattr(obj, "message", ""),
+    }
 
 def _iter_note_messages(responses) -> Iterable[str]:
     """Yield Sledge/Find/etc. messages; accept NOTE/WRITELN/INFORMATION/TRACING."""
     for r in (responses or []):
         typ = _normalize_response_type(getattr(r, "response_type", None))
         if typ not in ("NOTE", "WRITELN", "INFORMATION", "TRACING"):
+            # New API: also check FINISHED response nodes
+            if typ == "FINISHED":
+                body = getattr(r, "response_body", None)
+                if hasattr(body, "model_dump"):
+                    dump = body.model_dump()
+                    for node in (dump.get("nodes") or []):
+                        for msg in (node.get("messages") or []):
+                            if msg.get("kind") in ("writeln", "information", "tracing"):
+                                yield str(msg.get("message", ""))
             continue
         body = _decode_body(getattr(r, "response_body", None))
         if isinstance(body, dict):
@@ -69,7 +85,6 @@ def _iter_note_messages(responses) -> Iterable[str]:
             if msg is not None:
                 yield str(msg)
         elif isinstance(body, str):
-            # Some clients may return a plain string
             yield body
 
 # --- Variant step templates (tiny helper) ---
