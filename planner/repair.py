@@ -81,7 +81,11 @@ def _sanitize_llm_block(text: str) -> str:
                     last_closed_idx = i
     if last_closed_idx != -1 and last_closed_idx + 1 < len(lines):
         lines = lines[: last_closed_idx + 1]
-
+    # Fix common LLM syntax error: "by simp add:" -> "by (simp add:)"
+    text = "\n".join(lines)
+    text = re.sub(r'\bby\s+(simp|auto|force|fastforce)\s+add:', r'by (\1 add:', text)
+    text = re.sub(r'(by \((?:simp|auto|force|fastforce) add:[^)]+)$', r'\1)', text, flags=re.MULTILINE)
+    lines = text.splitlines()
     return "\n".join(lines).strip()
 
 def _is_effective_block(text: str) -> bool:
