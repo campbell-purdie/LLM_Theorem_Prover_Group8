@@ -360,11 +360,11 @@ def _print_state_before_hole(isabelle, session: str, full_text: str, hole_span: 
     proof_lines = lines[lemma_start:]
     try:
         thy = build_theory(_build_ml_prolog() + _inject_var_extraction(proof_lines), add_print_state=True, end_with="oops")
-        if trace:
-            print("[DEBUG] Theory text being sent to Isabelle:")
-            print("=" * 60)
-            for i, ln in enumerate(thy.splitlines()[:30]):
-                print(f"{i:3d}: {ln}")
+        #if trace:
+        #    print("[DEBUG] Theory text being sent to Isabelle:")
+        #    print("=" * 60)
+        #    for i, ln in enumerate(thy.splitlines()[:30]):
+        #        print(f"{i:3d}: {ln}")
         #     tl = thy.splitlines()
         #     if len(tl) > 40:
         #         print("  …")
