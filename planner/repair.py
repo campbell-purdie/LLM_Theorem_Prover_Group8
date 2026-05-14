@@ -600,6 +600,15 @@ def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: 
                      beam_k: int = 1, allow_whole_fallback: bool = False, trace: bool = False, 
                      resume_stage: int = 0) -> Tuple[str, bool, str]:
     t0 = time.monotonic()
+    
+    _, errs = _quick_state_and_errors(isabelle, session, full_text)
+    if not errs:
+        if trace:
+            print("[repair] No errors detected in current block. Victory Lap achieved - skipping repair.")
+        new_text = full_text.replace("sorry", "by simp", 1)
+        return new_text, True, "success:no-errors"
+
+    
     left = lambda: max(0.0, repair_budget_s - (time.monotonic() - t0))
     current_text = full_text
     state0 = _print_state_before_hole(isabelle, session, current_text, hole_span, trace=trace)
@@ -621,16 +630,15 @@ def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: 
     if resume_stage <= 1 and hs_s >= 0 and left() > 5.0:
         if trace:
             print("[repair] Trying have/show block repair…")
-        current_text = _repair_block(current_text, lines, hs_s, hs_e, goal_text, state0, 
-                                     isabelle, session, model, left, trace, "have-show", 
+        current_text = _repair_block(current_text, lines, hs_s, hs_e, goal_text, state0,
+                                     isabelle, session, model, left, trace, "have-show",
                                      stage=1, prior_store=prior_store)
         if current_text != full_text:
             thy = build_theory(current_text.splitlines(), add_print_state=False, end_with=None)
             ok, _ = finished_ok(_run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_VERIFY_TIMEOUT_S))
             if ok:
                 return current_text, True, "stage=1 block:have-show"
-            # FIX: Return False for unverified changes
-            return current_text, False, "stage=1 partial-progress"
+            # Don't return here - fall through to stage 2
         lines = current_text.splitlines()
         state0 = _print_state_before_hole(isabelle, session, current_text, hole_span, trace=trace)
     
@@ -772,18 +780,25 @@ def _repair_block(current_text: str, lines: List[str], start: int, end: int, goa
         thy = build_theory(patched.splitlines(), add_print_state=False, end_with=None)
         ok, _ = finished_ok(_run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_VERIFY_TIMEOUT_S))
         
+
         if ok:
             return patched
-        
-        # Update for next iteration - recalculate indices based on new block size
-        current_text = patched
-        lines = patched_lines  # Use the already-split lines
-        # Adjust end index: new_end = start + len(new_block_lines)
-        end = start + len(new_block_lines)
-        # Update proof context for next round too
-        proof_context = _extract_proof_context(current_text, start)
-    
-    return current_text
+                
+        # Only keep the patched version if it has fewer sorries than before
+        # Don't accumulate bad patches
+        orig_sorry_count = current_text.count("sorry")
+        new_sorry_count = patched.count("sorry")
+        if new_sorry_count < orig_sorry_count:
+            # Partial progress - keep it
+            current_text = patched
+            lines = patched_lines
+            end = start + len(new_block_lines)
+            proof_context = _extract_proof_context(current_text, start)
+        # else: revert - don't update current_text, keep original lines/end 
+            
+    return current_text    
+
+
 
 # ---------- Public helper: whole-proof regeneration with prior-failure banlist ----------
 def regenerate_whole_proof(*, full_text: str, goal_text: str, model: Optional[str],

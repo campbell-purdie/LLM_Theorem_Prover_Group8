@@ -522,10 +522,19 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
         focused_hole_key: Optional[str] = None
 
         while "sorry" in full and left_s() > 0:
+            try:
+                if _verify_full_proof(isa, session, full):
+                    if trace:
+                        print("[fill] Victory Lap: Proof is already verified! Exiting loop.")
+                    break 
+            except Exception as ex:
+                if trace:
+                    print(f"[fill] Victory Lap check failed: {ex}")
+            
             spans = find_sorry_spans(full)
             if not spans:
-                break
-
+                break    
+            
             span = None
             if focused_hole_key is not None:
                 for s in spans:
@@ -711,7 +720,16 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
                         if trace:
                             print("[repair] Could not open sorries; escalating stage...")
                         if start_stage < 2:
-                            repair_progress[hole_key] = 2
+                            # Increment stage gradually, don't jump straight to 2
+                            key = (hole_key, start_stage)
+                            stage_tries[key] = stage_tries.get(key, 0) + 1
+                            STAGE1_CAP = 2
+                            if stage_tries[key] >= STAGE1_CAP:
+                                repair_progress[hole_key] = 2
+                                if trace:
+                                    print(f"[repair] Stage 1 cap reached. Escalating to stage 2...")
+                            else:
+                                repair_progress[hole_key] = start_stage
                             focused_hole_key = hole_key
                         continue
 
