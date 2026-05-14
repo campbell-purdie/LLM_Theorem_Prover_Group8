@@ -1,3 +1,7 @@
 .venv/
 __pycache__/
-*.pyc
+models/premises/
+models/reranker/*.joblib
+models/reranker/*.pt
+*.log
+.DS_Store
