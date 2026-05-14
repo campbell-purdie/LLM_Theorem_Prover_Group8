@@ -409,6 +409,45 @@ def _maybe_proof_dash(text: str) -> str:
         return BARE_PROOF_RE.sub("proof -", text, count=1)
     return text
 
+def _strip_post_sorry_lines(text: str) -> str:
+    """Remove lines that appear after a sorry inside a have/show block."""
+    lines = text.splitlines()
+    out = []
+    in_sorry_block = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "sorry":
+            if not in_sorry_block:
+                in_sorry_block = True
+                out.append(line)
+            continue
+        if in_sorry_block:
+            if re.match(r"^\s*(?:have|show|case|next|qed|proof|obtain|assume|fix|let)\b", line):
+                in_sorry_block = False
+            else:
+                continue
+        out.append(line)
+    return "\n".join(out)
+
+def _strip_post_by_lines(text: str) -> str:
+    """Remove lines that appear after a closing by/done in a have/show block."""
+    lines = text.splitlines()
+    out = []
+    just_closed = False
+    for line in lines:
+        stripped = line.strip()
+        if just_closed:
+            if re.match(r"^\s*(?:have|show|case|next|qed|proof|obtain|assume|fix|let)\b", line):
+                just_closed = False
+            else:
+                continue
+        out.append(line)
+        if re.match(r"^\s*(by\b|done\b)", line) or stripped == "done":
+            just_closed = True
+    return "\n".join(out)
+
+
+
 def _sanitize_outline(text: str, goal: str, *, force_outline: bool) -> str:
     text = _ensure_lemma_header(text, goal)
     # Normalize ellipsis first (avoid Unicode / spaced form)
@@ -449,13 +488,23 @@ def _sanitize_outline(text: str, goal: str, *, force_outline: bool) -> str:
     #  3) Prefer 'proof -' when calculational cues are present.
     text = _normalize_show_kinds(text)
     text = _ensure_have_show_bodies(text)
+    text = _strip_post_sorry_lines(text)
+    text = _strip_post_by_lines(text)
     text = _maybe_proof_dash(text)
 
     # Trim to the first complete lemma..qed block to avoid trailing splices
     text = _crop_to_first_proof_block(text)
-
+    text = re.sub(r'(using[^\n]*)\n\s*\n(\s*by\b)', r'\1\n\2', text)
     if not text.endswith("\n"):
         text += "\n"
+    lines = text.splitlines()
+    for i in range(1, len(lines)):
+        if re.match(r'^\s*(by|done)\b', lines[i]):
+            prev = lines[i-1]
+            if re.match(r'^\s*(using|from|with)\b', prev):
+                indent = prev[:len(prev) - len(prev.lstrip())]
+                lines[i] = indent + lines[i].lstrip()
+    text = "\n".join(lines)
     return text
 
 def _quick_sketch_score(isabelle, session_id: str, outline_text: str) -> int:

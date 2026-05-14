@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from planner.skeleton import _strip_post_by_lines
 import time
 import re
 import os
@@ -74,7 +74,13 @@ def _fill_one_hole(isabelle, session: str, full_text: str, hole_span: Tuple[int,
     #     # if orig_goal:
     #     #     print(f"[fill] Original goal: {orig_goal}")
     #     print(f"[fill] Effective goal: {eff_goal}")
-    
+    #if trace:
+    #    print(f"[fill-debug] res keys: {list(res.keys())}")
+    #    print(f"[fill-debug] steps: {res.get('steps', [])}")
+    #    print(f"[fill-debug] success: {res.get('success')}")
+    #    print(f"[fill-debug] fin={fin!r} applies={applies}")
+
+
     res = prove_goal(
         isabelle, session, eff_goal, model_name_or_ensemble=model,
         beam_w=3, max_depth=6, hint_lemmas=6, timeout=per_hole_timeout,
@@ -85,7 +91,15 @@ def _fill_one_hole(isabelle, session: str, full_text: str, hole_span: Tuple[int,
         do_variants=False, variant_timeout=6, variant_tries=24,
         enable_reranker=True, initial_state_hint=state_block,
     )
-    
+    #if trace:
+    #    print(f"[fill-debug] success={res.get('success')} steps={res.get('steps', [])}")
+
+    #if trace:
+    #    print(f"[fill-debug] res keys: {list(res.keys())}")
+    #    print(f"[fill-debug] steps: {res.get('steps', [])}")
+    #    print(f"[fill-debug] success: {res.get('success')}")
+
+
     steps = [str(s) for s in res.get("steps", [])]
 
     # Fallbacks: some backends return finishers/applies in separate keys
@@ -124,7 +138,10 @@ def _fill_one_hole(isabelle, session: str, full_text: str, hole_span: Tuple[int,
         insert = "\n  " + "\n  ".join(script_lines) + "\n"
         s, e = hole_span
         new_text = full_text[:s] + insert + full_text[e:]
-        
+        new_text = re.sub(r'\n\s*\n\s*(by\b|done\b)', r'\n  \1', new_text)
+        new_text = _strip_post_by_lines(new_text)
+   #     if trace:
+   #         print(f"[fill-debug] about to verify, insert={insert!r}")
         if _verify_full_proof(isabelle, session, new_text):
             return new_text, True, "\n".join(script_lines)
         return full_text, False, "finisher-unverified"
@@ -529,18 +546,18 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: float = 240.0
         focused_hole_key: Optional[str] = None
 
         while "sorry" in full and get_time_left() > 0:
-            try:
-                if _verify_full_proof(isa, session, full):
-                    if trace:
-                        print("[fill] Victory Lap: Proof is already verified! Exiting loop.")
-                    break 
-            except Exception as ex:
-                if trace:
-                    print(f"[fill] Victory Lap check failed: {ex}")
-            
             spans = find_sorry_spans(full)
             if not spans:
-                break    
+                try:
+                    if _verify_full_proof(isa, session, full):
+                        if trace:
+                            print("[fill] Victory Lap: Proof is already verified! Exiting loop.")
+                        break 
+                except Exception as ex:
+                    if trace:
+                        print(f"[fill] Victory Lap check failed: {ex}")
+                break
+  
             
             current_repair_budget = min(get_time_left(), 60.0)
             if current_repair_budget < 5.0:

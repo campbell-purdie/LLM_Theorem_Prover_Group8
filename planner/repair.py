@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import json
 import os
 import re
@@ -41,6 +40,23 @@ _OUTLINE_BARE         = re.compile(r"(?m)^\s*(?:induction|cases|coinduction)\b.*
 def _log(prefix: str, label: str, content: str, trace: bool = True) -> None:
     if trace and content:
         print(f"[{prefix}] {label} (len={len(content)}):\n{content if content.strip() else '  (empty)'}")
+
+def _strip_post_by_lines(text: str) -> str:
+    """Remove lines that appear after a closing by/done in a have/show block."""
+    lines = text.splitlines()
+    out = []
+    just_closed = False
+    for line in lines:
+        stripped = line.strip()
+        if just_closed:
+            if re.match(r"^\s*(?:have|show|case|next|qed|proof|obtain|assume|fix|let)\b", line):
+                just_closed = False
+            else:
+                continue
+        out.append(line)
+        if re.match(r"^\s*(by\b|done\b)", line) or stripped == "done":
+            just_closed = True
+    return "\n".join(out)
 
 def _sanitize_llm_block(text: str) -> str:
     if not text:
@@ -85,6 +101,30 @@ def _sanitize_llm_block(text: str) -> str:
     text = "\n".join(lines)
     text = re.sub(r'\bby\s+(simp|auto|force|fastforce)\s+add:', r'by (\1 add:', text)
     text = re.sub(r'(by \((?:simp|auto|force|fastforce) add:[^)]+)$', r'\1)', text, flags=re.MULTILINE)
+    lines = text.splitlines()
+    # Strip lines after a closing "by ..." or "done" at base level (not inside proof/qed)
+    cleaned = []
+    depth = 0
+    closed = False
+    for line in lines:
+        if re.match(r"^\s*proof\b", line):
+            depth += 1
+            closed = False
+        elif re.match(r"^\s*qed\b", line):
+            depth = max(0, depth - 1)
+            closed = False
+        if depth == 0 and closed:
+            # Skip lines after a base-level closer
+            if re.match(r"^\s*(?:have|show|case|next|qed|proof|obtain)\b", line):
+                closed = False
+            else:
+                continue
+        cleaned.append(line)
+        if depth == 0 and re.match(r"^\s*(by\b|done\b)", line):
+            closed = True
+    lines = cleaned
+    text = "\n".join(lines)
+    text = _strip_post_by_lines(text)
     lines = text.splitlines()
     return "\n".join(lines).strip()
 
@@ -755,7 +795,7 @@ def _repair_block(current_text: str, lines: List[str], start: int, end: int, goa
             continue
         
         blk_with_sorry = _replace_failing_tactics_with_sorry(blk, full_text_lines=lines, start_line=start + 1, 
-                                                             end_line=end + 1, isabelle=isabelle, 
+                                                             end_line=start + len(blk.splitlines()), isabelle=isabelle, 
                                                              session=session, trace=trace)
         _log("repair", f"{block_type}-block (output)", blk_with_sorry, trace=trace)
         
