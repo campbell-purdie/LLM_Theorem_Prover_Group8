@@ -422,7 +422,8 @@ def plan_outline(goal: str, *, model: Optional[str] = None, outline_k: Optional[
     finally:
         _cleanup_resources(isa, proc)
 
-def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *, mode: str = "auto",
+def plan_and_fill(goal: str, model: Optional[str] = None, timeout: float = 240.0, start_time: Optional[float] = None,
+                 *, mode: str = "auto",
                  outline_k: Optional[int] = None, outline_temps: Optional[Iterable[float]] = None,
                  legacy_single_outline: bool = False, repairs: bool = True,
                  max_repairs_per_hole: int = 2, trace: bool = False, repair_trace: bool = False,
@@ -437,6 +438,12 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
       - Repair/verification timeouts or broken Isabelle responses must not crash the caller.
         We treat them as repair failures, and (best-effort) restart Isabelle for subsequent calls.
     """
+    if start_time is None:
+        start_time = time.monotonic()
+
+    def get_time_left():
+        return max(0.0, timeout - (time.monotonic() - start_time)) 
+
     if repair_trace and not trace:
         trace = True
 
@@ -497,8 +504,8 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
             except (TimeoutError, _FuturesTimeout, ValueError) as ex:
                 _restart_isabelle("verify_full_proof", ex)
 
-            if repairs and left_s() > 6.0:
-                full, ok = _repair_failed_proof_topdown(isa, session, full, goal, model, left_s, max_repairs_per_hole, trace)
+            if repairs and get_time_left() > 6.0:
+                full, ok = _repair_failed_proof_topdown(isa, session, full, goal, model, get_time_left, max_repairs_per_hole, trace)
                 if ok:
                     return PlanAndFillResult(True, full, [], [])
 
@@ -521,7 +528,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
 
         focused_hole_key: Optional[str] = None
 
-        while "sorry" in full and left_s() > 0:
+        while "sorry" in full and get_time_left() > 0:
             try:
                 if _verify_full_proof(isa, session, full):
                     if trace:
@@ -535,6 +542,11 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
             if not spans:
                 break    
             
+            current_repair_budget = min(get_time_left(), 60.0)
+            if current_repair_budget < 5.0:
+                if trace: print("[driver] Global timeout imminent. Stopping")
+                break
+
             span = None
             if focused_hole_key is not None:
                 for s in spans:
@@ -550,7 +562,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
                 span = spans[0]
 
             hole_key = _hole_fingerprint(full, span)
-            per_hole_budget = int(max(5, left_s() / max(1, len(spans))))
+            per_hole_budget = int(max(5, get_time_left() / max(1, len(spans))))
             start_stage = repair_progress.get(hole_key, 0)
 
             # Always try fill first unless we're in escalated repair stages
@@ -605,7 +617,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
 
             # Try CEGIS repairs
             current_stage = repair_progress.get(hole_key, 0)
-            if current_stage > 0 and repairs and left_s() > 6:
+            if current_stage > 0 and repairs and get_time_left() > 6:
                 try:
                     state = _print_state_before_hole(isa, session, full, span, trace)
                     eff_goal = _effective_goal_from_state(state, goal_text, full, span, trace)
@@ -621,7 +633,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
                     patched, applied, _ = try_cegis_repairs(
                         full_text=full, hole_span=span, goal_text=eff_goal, model=model,
                         isabelle=isa, session=session,
-                        repair_budget_s=min(30.0, max(15.0, left_s() * 0.33)),
+                        repair_budget_s=current_repair_budget,
                         max_ops_to_try=max_repairs_per_hole, beam_k=2,
                         allow_whole_fallback=False, trace=trace, resume_stage=current_stage,
                     )
@@ -669,7 +681,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
                             focused_hole_key = hole_key
                             continue
                         else:
-                            regen_budget = min(40.0, max(8.0, left_s() * 0.8))
+                            regen_budget = min(40.0, max(8.0, get_time_left() * 0.8))
                             try:
                                 new_full, ok_re, _ = regenerate_whole_proof(
                                     full_text=full, goal_text=goal_text, model=model,
