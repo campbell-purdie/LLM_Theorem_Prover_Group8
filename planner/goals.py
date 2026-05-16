@@ -18,16 +18,19 @@ _ISA_VERIFY_TIMEOUT_S = int(os.getenv("ISABELLE_VERIFY_TIMEOUT_S", "30"))
 def _run_theory_with_timeout(isabelle, session: str, thy: List[str], *, timeout_s: Optional[int]) -> List:
     """Execute theory with a hard timeout, interrupting Isabelle if needed."""
     timeout_s = timeout_s or _ISA_VERIFY_TIMEOUT_S
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        fut = ex.submit(run_theory, isabelle, session, thy)
+    executor = ThreadPoolExecutor(max_workers=1)
+    fut = executor.submit(run_theory, isabelle, session, thy)
+    try:
+        result = fut.result(timeout=timeout_s)
+        executor.shutdown(wait=False)
+        return result
+    except _FuturesTimeout:
+        executor.shutdown(wait=False, cancel_futures=True)
         try:
-            return fut.result(timeout=timeout_s)
-        except _FuturesTimeout:
-            try:
-                getattr(isabelle, "interrupt", lambda: None)()
-            except Exception:
-                pass
-            raise TimeoutError("isabelle_run_timeout")
+            getattr(isabelle, "interrupt", lambda: None)()
+        except Exception:
+            pass
+        raise TimeoutError("isabelle_run_timeout")
 
 
 def _verify_full_proof(isabelle, session: str, text: str) -> bool:

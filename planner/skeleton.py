@@ -443,6 +443,66 @@ def _strip_post_by_lines(text: str) -> str:
         i += 1
     return "\n".join(out)
 
+def _ensure_induction_case_shows(text: str) -> str:
+    """
+    In proof (induction ...) blocks, ensure every case branch has a show ?case before
+    'next' or 'qed'. If the branch only has intermediate 'have' facts but no 'show ?case',
+    insert 'show ?case\n  sorry' immediately before the 'next'/'qed' separator.
+    """
+    lines = text.splitlines()
+    stack: list[str] = []  # proof mode stack: "induct" | "cases" | "plain"
+    in_induct_case = False
+    has_show = False
+    case_indent = "  "
+    out: List[str] = []
+
+    for L in lines:
+        m_open = _PROOF_OPEN_RE.match(L)
+        if m_open:
+            mode = (m_open.group(1) or "").strip()
+            if _MODE_INDUCT_RE.match(mode):
+                stack.append("induct")
+            elif _MODE_CASES_RULE.match(mode) or _MODE_CASES_RE.match(mode):
+                stack.append("cases")
+            else:
+                stack.append("plain")
+            out.append(L)
+            continue
+
+        is_qed = bool(_QED_LINE_RE.match(L))
+        is_next = bool(re.match(r"^\s*next\b", L))
+
+        if is_qed or is_next:
+            if in_induct_case and not has_show and stack and stack[-1] == "induct":
+                out.append(f"{case_indent}show ?case")
+                out.append(f"{case_indent}  sorry")
+            if is_qed:
+                if stack:
+                    stack.pop()
+                in_induct_case = False
+                has_show = False
+            else:
+                # 'next' just ends this branch; the case state resets at the next 'case' line
+                in_induct_case = False
+                has_show = False
+            out.append(L)
+            continue
+
+        if CASE_START_RE.match(L):
+            in_induct_case = bool(stack and stack[-1] == "induct")
+            has_show = False
+            case_indent = " " * (len(L) - len(L.lstrip(" ")))
+            out.append(L)
+            continue
+
+        if re.match(r"^\s*(?:then\s+)?show\b", L):
+            has_show = True
+
+        out.append(L)
+
+    return "\n".join(out)
+
+
 def _maybe_proof_dash(text: str) -> str:
     """
     If there is a bare 'proof' at top-level and calculational cues present, prefer 'proof -'.
@@ -492,6 +552,7 @@ def _sanitize_outline(text: str, goal: str, *, force_outline: bool) -> str:
     #  2) Ensure every 'have/show' has a body; insert 'sorry' if missing to trigger fill/repair.
     #  3) Prefer 'proof -' when calculational cues are present.
     text = _normalize_show_kinds(text)
+    text = _ensure_induction_case_shows(text)
     text = _ensure_have_show_bodies(text)
     text = _strip_post_sorry_lines(text)
     text = _strip_post_by_lines(text)

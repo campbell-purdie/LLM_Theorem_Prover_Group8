@@ -591,11 +591,27 @@ def _replace_failing_tactics_with_sorry(block_text: str, *, full_text_lines: Lis
     
     return "\n".join(block_lines)
 
-def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: str, model: Optional[str], 
-                     isabelle, session: str, repair_budget_s: float = 15.0, max_ops_to_try: int = 3, 
-                     beam_k: int = 1, allow_whole_fallback: bool = False, trace: bool = False, 
+def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: str, model: Optional[str],
+                     isabelle, session: str, repair_budget_s: float = 15.0, max_ops_to_try: int = 3,
+                     beam_k: int = 1, allow_whole_fallback: bool = False, trace: bool = False,
                      resume_stage: int = 0) -> Tuple[str, bool, str]:
     t0 = time.monotonic()
+
+    # Early-exit checks before spending repair budget.
+    _, errs = _quick_state_and_errors(isabelle, session, full_text)
+    if not errs:
+        if "sorry" not in full_text:
+            # No errors and no sorry — verify and return; no repair needed.
+            if trace:
+                print("[repair] No errors detected and no sorry — verifying (Victory Lap).")
+            thy = build_theory(full_text.splitlines(), add_print_state=False, end_with=None)
+            ok, _ = finished_ok(_run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_VERIFY_TIMEOUT_S))
+            return full_text, ok, "success:no-errors"
+        else:
+            # No errors but sorry is present — sorry is suppressing downstream errors.
+            if trace:
+                print("[repair] No errors detected (sorry suppressing them). Proceeding with repair.")
+
     left = lambda: max(0.0, repair_budget_s - (time.monotonic() - t0))
     current_text = full_text
     state0 = _print_state_before_hole(isabelle, session, current_text, hole_span, trace=trace)
@@ -742,9 +758,30 @@ def _repair_block(current_text: str, lines: List[str], start: int, end: int, goa
         if blk.strip() == block.strip():
             continue
         
-        blk_with_sorry = _replace_failing_tactics_with_sorry(blk, full_text_lines=lines, start_line=start + 1, 
-                                                             end_line=end + 1, isabelle=isabelle, 
+        blk_with_sorry = _replace_failing_tactics_with_sorry(blk, full_text_lines=lines, start_line=start + 1,
+                                                             end_line=end + 1, isabelle=isabelle,
                                                              session=session, trace=trace)
+
+        # Re-indent to match the original block's first-line indentation.
+        # LLMs often strip leading spaces; without this the spliced block sits at column 0
+        # inside an indented case branch, producing syntactically dubious Isar.
+        orig_indent_n = len(lines[start]) - len(lines[start].lstrip(" ")) if lines[start].strip() else 0
+        raw_new_lines = blk_with_sorry.splitlines()
+        if raw_new_lines:
+            prop_first = raw_new_lines[0]
+            prop_indent_n = len(prop_first) - len(prop_first.lstrip(" ")) if prop_first.strip() else 0
+            diff = orig_indent_n - prop_indent_n
+            if diff != 0:
+                adjusted = []
+                for l in raw_new_lines:
+                    if not l.strip():
+                        adjusted.append(l)
+                    elif diff > 0:
+                        adjusted.append(" " * diff + l)
+                    else:
+                        adjusted.append(l[min(len(l) - len(l.lstrip(" ")), -diff):])
+                blk_with_sorry = "\n".join(adjusted)
+
         _log("repair", f"{block_type}-block (output)", blk_with_sorry, trace=trace)
         
         # Record this failed candidate into local and shared stores (so next round tries differ)

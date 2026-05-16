@@ -14,9 +14,11 @@ STRICT RULES
 - In `using`/`simp add:`/`unfolding` refer ONLY to named facts (no raw quoted propositions) in PROOF_CONTEXT.
 - Respect meta-targets: inside induction branches prefer `show ?case`; otherwise prefer `show ?thesis`.
 - Your output must be substantively different from every block in PRIOR FAILED BLOCKS.
-- When trivial, close with `by simp` / `by auto` / `by blast` / `by fastforce`, etc, but don't use . as a tactic. 
+- When trivial, close with `by simp` / `by auto` / `by blast` / `by fastforce`, etc, but don't use . as a tactic.
 - Never add "qed" in BLOCK
-- Don't copy text from PROOF_CONTEXT. 
+- Don't copy text from PROOF_CONTEXT.
+
+ISAR NAMING: In `proof (induction <var>)`, the induction hypothesis is `<Case>.IH` (e.g. `Cons.IH`), NOT `<Case>.hyps`. Use `<Case>.prems` for other premises of the goal. `<Case>.hyps` is for structural facts in datatype case splits, not for induction hypotheses.
 
 LIGHT GRAMMAR (allowed shapes)
 <stmt> ::=
@@ -82,9 +84,11 @@ STRICT RULES
 - In `using`/`simp add:`/`unfolding` refer ONLY to named facts (no raw quoted propositions) in PROOF_CONTEXT.
 - Respect meta-targets: inside induction branches prefer `show ?case`; otherwise prefer `show ?thesis`.
 - Your output must be substantively different from every block in PRIOR FAILED BLOCKS.
-- When trivial, close with `by simp` / `by auto` / `by blast` / `by fastforce`, etc, but don't use . as a tactic. 
+- When trivial, close with `by simp` / `by auto` / `by blast` / `by fastforce`, etc, but don't use . as a tactic.
 - Don't add "qed" if there isn't an open "proof".
-- Don't copy text from PROOF_CONTEXT. 
+- Don't copy text from PROOF_CONTEXT.
+
+ISAR NAMING: In `proof (induction <var>)`, the induction hypothesis is `<Case>.IH` (e.g. `Cons.IH`), NOT `<Case>.hyps`. Use `<Case>.prems` for other premises of the goal. `<Case>.hyps` is for structural facts in datatype case splits, not for induction hypotheses.
 
 LIGHT GRAMMAR (allowed shapes)
 <stmt> ::=
