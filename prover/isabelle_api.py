@@ -178,16 +178,24 @@ def run_theory(
             except Exception:
                 timeout_s = 0
         if timeout_s > 0:
-            # Always enforce a wall-clock timeout (even if native timeouts exist but are ignored).
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(_use_theories_call, isabelle, session_id=session_id, master_dir=tmpdir.name, timeout_s=timeout_s)
-                try:
-                    return fut.result(timeout=timeout_s)
-                except FuturesTimeout:
-                    global _use_timeouts
-                    _use_timeouts += 1
-                    _last_call_timed_out = True
-                    return []
+            # Enforce a wall-clock timeout without blocking on the hung thread afterwards.
+            # Using `with ThreadPoolExecutor` calls shutdown(wait=True) on exit, which hangs
+            # on Python 3.14 when the underlying isabelle_client asyncio call never returns.
+            executor = ThreadPoolExecutor(max_workers=1)
+            fut = executor.submit(
+                _use_theories_call, isabelle,
+                session_id=session_id, master_dir=tmpdir.name, timeout_s=timeout_s,
+            )
+            try:
+                result = fut.result(timeout=timeout_s)
+                executor.shutdown(wait=False)
+                return result
+            except FuturesTimeout:
+                global _use_timeouts
+                _use_timeouts += 1
+                _last_call_timed_out = True
+                executor.shutdown(wait=False, cancel_futures=True)
+                return []
 
         # No timeout requested → direct call
         return list(isabelle.use_theories(theories=["Scratch"], session_id=session_id, master_dir=tmpdir.name))

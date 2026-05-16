@@ -399,6 +399,50 @@ def _ensure_have_show_bodies(text: str) -> str:
         i += 1
     return "\n".join(out)
 
+_POST_FINISHER_BOUNDARY = re.compile(
+    r"^\s*(?:next|qed|case\b|have\b|show\b|obtain\b|also\b|moreover\b|ultimately\b|finally\b|theorem\b|lemma\b)\b"
+)
+
+def _strip_post_sorry_lines(text: str) -> str:
+    """Remove LLM-hallucinated junk lines that follow a standalone 'sorry'."""
+    lines = text.splitlines()
+    out: List[str] = []
+    i = 0
+    while i < len(lines):
+        L = lines[i]
+        out.append(L)
+        if L.strip() == "sorry":
+            j = i + 1
+            while j < len(lines):
+                Nj = lines[j]
+                if not Nj.strip() or _POST_FINISHER_BOUNDARY.match(Nj):
+                    break
+                j += 1
+            i = j
+            continue
+        i += 1
+    return "\n".join(out)
+
+def _strip_post_by_lines(text: str) -> str:
+    """Remove LLM-hallucinated junk lines that follow a 'by …' or 'done' finisher."""
+    lines = text.splitlines()
+    out: List[str] = []
+    i = 0
+    while i < len(lines):
+        L = lines[i]
+        out.append(L)
+        if re.match(r"^\s*(by\b|done\b)", L) or re.search(r"\s+by\s+\S", L):
+            j = i + 1
+            while j < len(lines):
+                Nj = lines[j]
+                if not Nj.strip() or _POST_FINISHER_BOUNDARY.match(Nj):
+                    break
+                j += 1
+            i = j
+            continue
+        i += 1
+    return "\n".join(out)
+
 def _maybe_proof_dash(text: str) -> str:
     """
     If there is a bare 'proof' at top-level and calculational cues present, prefer 'proof -'.
@@ -449,6 +493,8 @@ def _sanitize_outline(text: str, goal: str, *, force_outline: bool) -> str:
     #  3) Prefer 'proof -' when calculational cues are present.
     text = _normalize_show_kinds(text)
     text = _ensure_have_show_bodies(text)
+    text = _strip_post_sorry_lines(text)
+    text = _strip_post_by_lines(text)
     text = _maybe_proof_dash(text)
 
     # Trim to the first complete lemma..qed block to avoid trailing splices

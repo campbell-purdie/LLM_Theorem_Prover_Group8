@@ -10,6 +10,7 @@ import hashlib
 
 from planner.skeleton import (
     Skeleton, find_sorry_spans, propose_isar_skeleton, propose_isar_skeleton_diverse_best,
+    _strip_post_by_lines,
 )
 from planner.repair import try_cegis_repairs, regenerate_whole_proof, _APPLY_OR_BY as _TACTIC_LINE_RE
 from prover.config import ISABELLE_SESSION
@@ -32,6 +33,10 @@ _INLINE_BY_TAIL = re.compile(r"\s+by\s+.+$")
 _BARE_DOT = re.compile(r"(?m)^\s*\.\s*$")
 _HEAD_CMD_RE = re.compile(r"^\s*(have|show|obtain)\b")  # local copy to avoid new imports
 _ISA_VERIFY_TIMEOUT_S = int(os.getenv("ISABELLE_VERIFY_TIMEOUT_S", "30"))
+
+# Stage caps — configurable via env vars so stage 3 can be forced during testing.
+STAGE1_CAP = int(os.getenv("REPAIR_STAGE1_CAP", "2"))
+STAGE2_CAP = int(os.getenv("REPAIR_STAGE2_CAP", "3"))
 
 @dataclass(slots=True)
 class PlanAndFillResult:
@@ -123,7 +128,8 @@ def _fill_one_hole(isabelle, session: str, full_text: str, hole_span: Tuple[int,
         insert = "\n  " + "\n  ".join(script_lines) + "\n"
         s, e = hole_span
         new_text = full_text[:s] + insert + full_text[e:]
-        
+        new_text = _strip_post_by_lines(new_text)
+
         if _verify_full_proof(isabelle, session, new_text):
             return new_text, True, "\n".join(script_lines)
         return full_text, False, "finisher-unverified"
@@ -639,9 +645,6 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
                     # Unverified change: count attempt and decide escalation
                     key = (hole_key, start_stage)
                     stage_tries[key] = stage_tries.get(key, 0) + 1
-
-                    STAGE1_CAP = 2
-                    STAGE2_CAP = 3
 
                     should_escalate = False
                     if start_stage == 1 and stage_tries[key] >= STAGE1_CAP:
