@@ -643,10 +643,16 @@ def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: 
     
     _, errs = _quick_state_and_errors(isabelle, session, full_text)
     if not errs:
-        if trace:
-            print("[repair] No errors detected in current block. Victory Lap achieved - skipping repair.")
-        new_text = full_text.replace("sorry", "by simp", 1)
-        return new_text, True, "success:no-errors"
+        if "sorry" not in full_text:
+            if trace:
+                print("[repair] No errors detected in current block. Victory Lap achieved - skipping repair.")
+            thy = build_theory(full_text.splitlines(), add_print_state=False, end_with=None)
+            ok, _ = finished_ok(_run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_VERIFY_TIMEOUT_S))
+        #    return full_text, ok, "success:no-errors"
+        #else:
+            if trace:
+                print("[repair] No errors detected (sorry suppressing them). Proceeding with repair anyway.")
+                return full_text, ok, "success:no-errors"
 
     
     left = lambda: max(0.0, repair_budget_s - (time.monotonic() - t0))
@@ -699,19 +705,19 @@ def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: 
     
     # Stage 2b: Subproof
     ps, pe = _enclosing_subproof(lines, focus_line)
-    if resume_stage <= 2 and ps >= 0 and left() > 3.0:
+    if resume_stage == 2 and cs < 0 and ps < 0 and hs_s >= 0 and left() > 3.0:
         if trace:
-            print("[repair] Trying subproof repair…")
-        current_text = _repair_block(current_text, lines, ps, pe, goal_text, state0, isabelle, session, 
-                                     model, left, trace, "subproof", stage=2, prior_store=prior_store)
+            print("[repair] Stage 2: no case/subproof found, retrying have-show block…")
+        current_text = _repair_block(current_text, lines, hs_s, hs_e, goal_text, state0,
+                                    isabelle, session, model, left, trace, "have-show",
+                                    stage=2, prior_store=prior_store)
         if current_text != full_text:
             thy = build_theory(current_text.splitlines(), add_print_state=False, end_with=None)
             ok, _ = finished_ok(_run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_VERIFY_TIMEOUT_S))
             if ok:
-                return current_text, True, "stage=2 block:subproof"
-            # FIX: Return False for unverified changes
+                return current_text, True, "stage=2 fallback:have-show"
             return current_text, False, "stage=2 partial-progress"
-    
+        
     if current_text != full_text:
         return current_text, False, f"stage={resume_stage} partial-progress"
     return full_text, False, f"stage={resume_stage} cegis-nohelp"

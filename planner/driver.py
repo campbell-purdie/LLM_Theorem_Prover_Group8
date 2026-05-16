@@ -49,7 +49,7 @@ class PlanAndFillResult:
 def _fill_one_hole(isabelle, session: str, full_text: str, hole_span: Tuple[int, int], 
                   goal_text: str, model: Optional[str], per_hole_timeout: int, *, trace: bool = False) -> Tuple[str, bool, str]:
     """Fill single hole in proof."""
-    
+    #return full_text, False, "fill-disabled"
     # Check for stale hole
     try:
         s_line_start = full_text.rfind("\n", 0, hole_span[0]) + 1
@@ -559,7 +559,9 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: float = 240.0
                 break
   
             
-            current_repair_budget = min(get_time_left(), 60.0)
+            current_stage_for_budget = repair_progress.get(focused_hole_key, 0) if focused_hole_key else 0
+            max_budget = 60.0 if current_stage_for_budget >= 2 else 30.0
+            current_repair_budget = min(get_time_left(), max_budget)
             if current_repair_budget < 5.0:
                 if trace: print("[driver] Global timeout imminent. Stopping")
                 break
@@ -749,26 +751,41 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: float = 240.0
                         if trace:
                             print("[repair] Could not open sorries; escalating stage...")
                         if start_stage < 2:
-                            # Increment stage gradually, don't jump straight to 2
-                            key = (hole_key, start_stage)
-                            stage_tries[key] = stage_tries.get(key, 0) + 1
-                            STAGE1_CAP = 2
-                            if stage_tries[key] >= STAGE1_CAP:
-                                repair_progress[hole_key] = 2
-                                if trace:
-                                    print(f"[repair] Stage 1 cap reached. Escalating to stage 2...")
-                            else:
-                                repair_progress[hole_key] = start_stage
+                            repair_progress[hole_key] = 2
+                            if trace:
+                                print(f"[repair] Could not open sorries. Escalating directly to stage 2...")
                             focused_hole_key = hole_key
                         continue
 
                 # No change from repair: count attempt and escalate
+                try:
+                    if _verify_full_proof(isa, session, full):
+                        if trace:
+                            print(f"[repair] No change but proof already verified. Done.")
+                        repair_progress.clear()
+                        stage_tries.clear()
+                        focused_hole_key = None
+                        continue  # will hit the "sorry" not in full check at top, or Victory Lap
+                except Exception:
+                    pass
                 key = (hole_key, start_stage)
                 stage_tries[key] = stage_tries.get(key, 0) + 1
-                if start_stage < 2:
-                    repair_progress[hole_key] = min(start_stage + 1, 2)
+                if start_stage == 1:
+                    STAGE1_CAP = 2
+                    if stage_tries[key] >= STAGE1_CAP:
+                        repair_progress[hole_key] = 2
+                        if trace:
+                            print(f"[repair] Stage 1 no-change cap reached. Escalating to stage 2...")
+                    else:
+                        repair_progress[hole_key] = 1  # stay at stage 1, retry
                     focused_hole_key = hole_key
-                else:
+                elif start_stage == 2:
+                    STAGE2_CAP = 3
+                    if stage_tries[key] >= STAGE2_CAP:
+                        if trace:
+                            print(f"[repair] Stage 2 no-change cap reached. Will regenerate whole proof...")
+                        # leave repair_progress at 2; the patched != full branch handles regen
+                        # but since there's no change, force escalation by bumping past cap
                     repair_progress[hole_key] = 2
                     focused_hole_key = hole_key
 
