@@ -469,6 +469,10 @@ def _sanitize_outline(text: str, goal: str, *, force_outline: bool) -> str:
     if not QED_RE.search(text):
         text = text.rstrip() + "\nqed\n"
 
+    # Replace known-invalid tactics with sorry regardless of force_outline
+    INVALID_TACTICS = re.compile(r"\s+by\s+(this|assumption|that|it)\s*$", re.MULTILINE)
+    text = INVALID_TACTICS.sub(" sorry", text)
+
     # Force an outline (remove inline 'by' if requested by caller)
     if force_outline:
         lines = text.splitlines()

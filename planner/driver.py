@@ -81,16 +81,24 @@ def _fill_one_hole(isabelle, session: str, full_text: str, hole_span: Tuple[int,
     #    print(f"[fill-debug] fin={fin!r} applies={applies}")
 
 
-    res = prove_goal(
-        isabelle, session, eff_goal, model_name_or_ensemble=model,
-        beam_w=3, max_depth=6, hint_lemmas=6, timeout=per_hole_timeout,
-        models=None, save_dir=None, use_sledge=True, sledge_timeout=10,
-        sledge_every=1, trace=trace, use_color=False, use_qc=False,
-        qc_timeout=2, qc_every=1, use_np=False, np_timeout=5, np_every=2,
-        facts_limit=8, do_minimize=False, minimize_timeout=8,
-        do_variants=False, variant_timeout=6, variant_tries=24,
-        enable_reranker=True, initial_state_hint=state_block,
-    )
+   
+    with ThreadPoolExecutor(max_workers=1) as _ex:
+        _fut = _ex.submit(prove_goal,
+            isabelle, session, eff_goal, model_name_or_ensemble=model,
+            beam_w=3, max_depth=6, hint_lemmas=6, timeout=per_hole_timeout,
+            models=None, save_dir=None, use_sledge=True, sledge_timeout=10,
+            sledge_every=1, trace=trace, use_color=False, use_qc=False,
+            qc_timeout=2, qc_every=1, use_np=False, np_timeout=5, np_every=2,
+            facts_limit=8, do_minimize=False, minimize_timeout=8,
+            do_variants=False, variant_timeout=6, variant_tries=24,
+            enable_reranker=True, initial_state_hint=state_block,
+        )
+        try:
+            res = _fut.result(timeout=per_hole_timeout + 5)
+        except _FuturesTimeout:
+            if trace:
+                print(f"[fill] prove_goal hard timeout after {per_hole_timeout+5}s")
+            return full_text, False, "fill-timeout"
     #if trace:
     #    print(f"[fill-debug] success={res.get('success')} steps={res.get('steps', [])}")
 
