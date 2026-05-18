@@ -36,10 +36,9 @@ _HEAD_CMD_RE = re.compile(r"^\s*(have|show|obtain)\b")  # local copy to avoid ne
 _ISA_VERIFY_TIMEOUT_S = int(os.getenv("ISABELLE_VERIFY_TIMEOUT_S", "30"))
 
 # Stage caps — configurable via env vars so stage 3 can be forced during testing.
-#STAGE1_CAP = int(os.getenv("REPAIR_STAGE1_CAP", "2"))
-#STAGE2_CAP = int(os.getenv("REPAIR_STAGE2_CAP", "3"))
-STAGE1_CAP = int(os.getenv("REPAIR_STAGE1_CAP", "1"))
-STAGE2_CAP = int(os.getenv("REPAIR_STAGE2_CAP", "1"))
+STAGE1_CAP = int(os.getenv("REPAIR_STAGE1_CAP", "2"))
+STAGE2_CAP = int(os.getenv("REPAIR_STAGE2_CAP", "3"))
+
 
 @dataclass(slots=True)
 class PlanAndFillResult:
