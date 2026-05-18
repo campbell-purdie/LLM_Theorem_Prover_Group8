@@ -149,10 +149,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             file=sys.stderr,
         )
 
+    import time
+    start_time = time.monotonic()
+
     res = plan_and_fill(
         goal,
         model=args.model,
         timeout=args.timeout,
+        start_time=start_time,
         mode=args.mode,
         outline_k=args.k if args.diverse else 1,
         outline_temps=args.temps,

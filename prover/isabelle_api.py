@@ -226,7 +226,12 @@ def finished_ok(resps: List[IsabelleResponse]) -> Tuple[bool, Dict[str, Any]]:
     for r in (resps or []):
         if _normalize_type(_get_field(r, ("response_type", "type", "kind", "tag", "name"))) != "FINISHED":
             continue
-        obj = _decode_body_to_dict(_get_field(r, ("response_body", "body", "message", "payload")))
+        raw = _get_field(r, ("response_body", "body", "message", "payload"))
+        # New API: Pydantic object
+        if hasattr(raw, "model_dump"):
+            obj = raw.model_dump()
+        else:
+            obj = _decode_body_to_dict(raw)
         if not isinstance(obj, dict):
             continue
         last_obj = obj  # track last FINISHED
@@ -297,8 +302,33 @@ __all__ = [
     "_header", "FOOTER", "parse_n_subgoals", "build_theory", "run_theory",
     "finished_ok", "last_print_state_block", "use_calls_count", "use_timeouts_count",
     "last_call_timed_out",
+    "extract_session_id"
     "graceful_terminate",
 ]
+
+def extract_session_id(response) -> str:
+    """Extract session_id from isabelle_client session_start response.
+    
+    Handles both old API (returns str directly) and new API (returns list of response objects).
+    """
+    # Old API: returns a plain string
+    if isinstance(response, str):
+        return response
+    # New API: returns a list of response objects
+    if isinstance(response, list):
+        for item in reversed(response):
+            # Try attribute-style access
+            body = getattr(item, "response_body", None)
+            if body is not None:
+                sid = getattr(body, "session_id", None)
+                if sid:
+                    return str(sid)
+            # Try dict-style access
+            if isinstance(item, dict):
+                body = item.get("response_body", {})
+                if isinstance(body, dict) and "session_id" in body:
+                    return str(body["session_id"])
+    raise ValueError(f"Could not extract session_id from response: {response}")
 
 # Cross-runtime shutdown helper (works for multiprocessing.Process and subprocess.Popen)
 def graceful_terminate(proc, timeout_s: int = 3) -> None:

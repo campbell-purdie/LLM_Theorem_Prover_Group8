@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import json
 import os
 import re
@@ -42,6 +41,23 @@ def _log(prefix: str, label: str, content: str, trace: bool = True) -> None:
     if trace and content:
         print(f"[{prefix}] {label} (len={len(content)}):\n{content if content.strip() else '  (empty)'}")
 
+def _strip_post_by_lines(text: str) -> str:
+    """Remove lines that appear after a closing by/done in a have/show block."""
+    lines = text.splitlines()
+    out = []
+    just_closed = False
+    for line in lines:
+        stripped = line.strip()
+        if just_closed:
+            if re.match(r"^\s*(?:have|show|case|next|qed|proof|obtain|assume|fix|let)\b", line):
+                just_closed = False
+            else:
+                continue
+        out.append(line)
+        if re.match(r"^\s*(by\b|done\b)", line) or stripped == "done":
+            just_closed = True
+    return "\n".join(out)
+
 def _sanitize_llm_block(text: str) -> str:
     if not text:
         return text
@@ -81,7 +97,35 @@ def _sanitize_llm_block(text: str) -> str:
                     last_closed_idx = i
     if last_closed_idx != -1 and last_closed_idx + 1 < len(lines):
         lines = lines[: last_closed_idx + 1]
-
+    # Fix common LLM syntax error: "by simp add:" -> "by (simp add:)"
+    text = "\n".join(lines)
+    text = re.sub(r'\bby\s+(simp|auto|force|fastforce)\s+add:', r'by (\1 add:', text)
+    text = re.sub(r'(by \((?:simp|auto|force|fastforce) add:[^)]+)$', r'\1)', text, flags=re.MULTILINE)
+    lines = text.splitlines()
+    # Strip lines after a closing "by ..." or "done" at base level (not inside proof/qed)
+    cleaned = []
+    depth = 0
+    closed = False
+    for line in lines:
+        if re.match(r"^\s*proof\b", line):
+            depth += 1
+            closed = False
+        elif re.match(r"^\s*qed\b", line):
+            depth = max(0, depth - 1)
+            closed = False
+        if depth == 0 and closed:
+            # Skip lines after a base-level closer
+            if re.match(r"^\s*(?:have|show|case|next|qed|proof|obtain)\b", line):
+                closed = False
+            else:
+                continue
+        cleaned.append(line)
+        if depth == 0 and re.match(r"^\s*(by\b|done\b)", line):
+            closed = True
+    lines = cleaned
+    text = "\n".join(lines)
+    text = _strip_post_by_lines(text)
+    lines = text.splitlines()
     return "\n".join(lines).strip()
 
 def _is_effective_block(text: str) -> bool:
@@ -596,6 +640,7 @@ def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: 
                      beam_k: int = 1, allow_whole_fallback: bool = False, trace: bool = False,
                      resume_stage: int = 0) -> Tuple[str, bool, str]:
     t0 = time.monotonic()
+<<<<<<< HEAD
 
     # Early-exit checks before spending repair budget.
     _, errs = _quick_state_and_errors(isabelle, session, full_text)
@@ -612,6 +657,23 @@ def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: 
             if trace:
                 print("[repair] No errors detected (sorry suppressing them). Proceeding with repair.")
 
+=======
+    
+    _, errs = _quick_state_and_errors(isabelle, session, full_text)
+    if not errs:
+        if "sorry" not in full_text:
+            if trace:
+                print("[repair] No errors detected in current block. Victory Lap achieved - skipping repair.")
+            thy = build_theory(full_text.splitlines(), add_print_state=False, end_with=None)
+            ok, _ = finished_ok(_run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_VERIFY_TIMEOUT_S))
+        #    return full_text, ok, "success:no-errors"
+        #else:
+            if trace:
+                print("[repair] No errors detected (sorry suppressing them). Proceeding with repair anyway.")
+                return full_text, ok, "success:no-errors"
+
+    
+>>>>>>> fix/isabelle-client-compatibility
     left = lambda: max(0.0, repair_budget_s - (time.monotonic() - t0))
     current_text = full_text
     state0 = _print_state_before_hole(isabelle, session, current_text, hole_span, trace=trace)
@@ -633,16 +695,15 @@ def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: 
     if resume_stage <= 1 and hs_s >= 0 and left() > 5.0:
         if trace:
             print("[repair] Trying have/show block repair…")
-        current_text = _repair_block(current_text, lines, hs_s, hs_e, goal_text, state0, 
-                                     isabelle, session, model, left, trace, "have-show", 
+        current_text = _repair_block(current_text, lines, hs_s, hs_e, goal_text, state0,
+                                     isabelle, session, model, left, trace, "have-show",
                                      stage=1, prior_store=prior_store)
         if current_text != full_text:
             thy = build_theory(current_text.splitlines(), add_print_state=False, end_with=None)
             ok, _ = finished_ok(_run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_VERIFY_TIMEOUT_S))
             if ok:
                 return current_text, True, "stage=1 block:have-show"
-            # FIX: Return False for unverified changes
-            return current_text, False, "stage=1 partial-progress"
+            # Don't return here - fall through to stage 2
         lines = current_text.splitlines()
         state0 = _print_state_before_hole(isabelle, session, current_text, hole_span, trace=trace)
     
@@ -663,19 +724,19 @@ def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: 
     
     # Stage 2b: Subproof
     ps, pe = _enclosing_subproof(lines, focus_line)
-    if resume_stage <= 2 and ps >= 0 and left() > 3.0:
+    if resume_stage == 2 and cs < 0 and ps < 0 and hs_s >= 0 and left() > 3.0:
         if trace:
-            print("[repair] Trying subproof repair…")
-        current_text = _repair_block(current_text, lines, ps, pe, goal_text, state0, isabelle, session, 
-                                     model, left, trace, "subproof", stage=2, prior_store=prior_store)
+            print("[repair] Stage 2: no case/subproof found, retrying have-show block…")
+        current_text = _repair_block(current_text, lines, hs_s, hs_e, goal_text, state0,
+                                    isabelle, session, model, left, trace, "have-show",
+                                    stage=2, prior_store=prior_store)
         if current_text != full_text:
             thy = build_theory(current_text.splitlines(), add_print_state=False, end_with=None)
             ok, _ = finished_ok(_run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_VERIFY_TIMEOUT_S))
             if ok:
-                return current_text, True, "stage=2 block:subproof"
-            # FIX: Return False for unverified changes
+                return current_text, True, "stage=2 fallback:have-show"
             return current_text, False, "stage=2 partial-progress"
-    
+        
     if current_text != full_text:
         return current_text, False, f"stage={resume_stage} partial-progress"
     return full_text, False, f"stage={resume_stage} cegis-nohelp"
@@ -758,8 +819,13 @@ def _repair_block(current_text: str, lines: List[str], start: int, end: int, goa
         if blk.strip() == block.strip():
             continue
         
+<<<<<<< HEAD
         blk_with_sorry = _replace_failing_tactics_with_sorry(blk, full_text_lines=lines, start_line=start + 1,
                                                              end_line=end + 1, isabelle=isabelle,
+=======
+        blk_with_sorry = _replace_failing_tactics_with_sorry(blk, full_text_lines=lines, start_line=start + 1, 
+                                                             end_line=start + len(blk.splitlines()), isabelle=isabelle, 
+>>>>>>> fix/isabelle-client-compatibility
                                                              session=session, trace=trace)
 
         # Re-indent to match the original block's first-line indentation.
@@ -805,18 +871,25 @@ def _repair_block(current_text: str, lines: List[str], start: int, end: int, goa
         thy = build_theory(patched.splitlines(), add_print_state=False, end_with=None)
         ok, _ = finished_ok(_run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_VERIFY_TIMEOUT_S))
         
+
         if ok:
             return patched
-        
-        # Update for next iteration - recalculate indices based on new block size
-        current_text = patched
-        lines = patched_lines  # Use the already-split lines
-        # Adjust end index: new_end = start + len(new_block_lines)
-        end = start + len(new_block_lines)
-        # Update proof context for next round too
-        proof_context = _extract_proof_context(current_text, start)
-    
-    return current_text
+                
+        # Only keep the patched version if it has fewer sorries than before
+        # Don't accumulate bad patches
+        orig_sorry_count = current_text.count("sorry")
+        new_sorry_count = patched.count("sorry")
+        if new_sorry_count < orig_sorry_count:
+            # Partial progress - keep it
+            current_text = patched
+            lines = patched_lines
+            end = start + len(new_block_lines)
+            proof_context = _extract_proof_context(current_text, start)
+        # else: revert - don't update current_text, keep original lines/end 
+            
+    return current_text    
+
+
 
 # ---------- Public helper: whole-proof regeneration with prior-failure banlist ----------
 def regenerate_whole_proof(*, full_text: str, goal_text: str, model: Optional[str],

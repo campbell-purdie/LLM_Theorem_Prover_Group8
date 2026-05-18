@@ -36,6 +36,7 @@ from asyncio.base_subprocess import BaseSubprocessTransport as _BST
 from planner.driver import plan_and_fill
 from planner.skeleton import find_sorry_spans
 from prover.isabelle_api import (
+    extract_session_id,
     start_isabelle_server,
     get_isabelle_client,
     build_theory,
@@ -187,14 +188,14 @@ def _session_start_with_fallback(client):
     """
     wanted = _pick_session_name()
     try:
-        sid = client.session_start(session=wanted)
+        sid = extract_session_id(client.session_start(session=wanted))
         return sid, wanted
     except Exception as e:
         msg = str(e)
         # "FAILED" is what isabelle_client raises when the image isn't available.
         if "FAILED" in msg and wanted != "HOL":
             try:
-                sid = client.session_start(session="HOL")
+                sid = extract_session_id(client.session_start(session="HOL"))
                 print(f"[experiments] session '{wanted}' unavailable → falling back to 'HOL'")
                 return sid, "HOL"
             except Exception:

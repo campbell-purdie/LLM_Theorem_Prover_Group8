@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from planner.skeleton import _strip_post_by_lines
 import time
 import re
 import os
@@ -15,6 +15,7 @@ from planner.skeleton import (
 from planner.repair import try_cegis_repairs, regenerate_whole_proof, _APPLY_OR_BY as _TACTIC_LINE_RE
 from prover.config import ISABELLE_SESSION
 from prover.isabelle_api import (
+    extract_session_id,
     build_theory, get_isabelle_client, last_print_state_block, start_isabelle_server,
 )
 from prover.prover import prove_goal
@@ -53,7 +54,7 @@ class PlanAndFillResult:
 def _fill_one_hole(isabelle, session: str, full_text: str, hole_span: Tuple[int, int], 
                   goal_text: str, model: Optional[str], per_hole_timeout: int, *, trace: bool = False) -> Tuple[str, bool, str]:
     """Fill single hole in proof."""
-    
+    #return full_text, False, "fill-disabled"
     # Check for stale hole
     try:
         s_line_start = full_text.rfind("\n", 0, hole_span[0]) + 1
@@ -78,18 +79,40 @@ def _fill_one_hole(isabelle, session: str, full_text: str, hole_span: Tuple[int,
     #     # if orig_goal:
     #     #     print(f"[fill] Original goal: {orig_goal}")
     #     print(f"[fill] Effective goal: {eff_goal}")
-    
-    res = prove_goal(
-        isabelle, session, eff_goal, model_name_or_ensemble=model,
-        beam_w=3, max_depth=6, hint_lemmas=6, timeout=per_hole_timeout,
-        models=None, save_dir=None, use_sledge=True, sledge_timeout=10,
-        sledge_every=1, trace=trace, use_color=False, use_qc=False,
-        qc_timeout=2, qc_every=1, use_np=False, np_timeout=5, np_every=2,
-        facts_limit=8, do_minimize=False, minimize_timeout=8,
-        do_variants=False, variant_timeout=6, variant_tries=24,
-        enable_reranker=True, initial_state_hint=state_block,
-    )
-    
+    #if trace:
+    #    print(f"[fill-debug] res keys: {list(res.keys())}")
+    #    print(f"[fill-debug] steps: {res.get('steps', [])}")
+    #    print(f"[fill-debug] success: {res.get('success')}")
+    #    print(f"[fill-debug] fin={fin!r} applies={applies}")
+
+
+   
+    with ThreadPoolExecutor(max_workers=1) as _ex:
+        _fut = _ex.submit(prove_goal,
+            isabelle, session, eff_goal, model_name_or_ensemble=model,
+            beam_w=3, max_depth=6, hint_lemmas=6, timeout=per_hole_timeout,
+            models=None, save_dir=None, use_sledge=True, sledge_timeout=10,
+            sledge_every=1, trace=trace, use_color=False, use_qc=False,
+            qc_timeout=2, qc_every=1, use_np=False, np_timeout=5, np_every=2,
+            facts_limit=8, do_minimize=False, minimize_timeout=8,
+            do_variants=False, variant_timeout=6, variant_tries=24,
+            enable_reranker=True, initial_state_hint=state_block,
+        )
+        try:
+            res = _fut.result(timeout=per_hole_timeout + 5)
+        except _FuturesTimeout:
+            if trace:
+                print(f"[fill] prove_goal hard timeout after {per_hole_timeout+5}s")
+            return full_text, False, "fill-timeout"
+    #if trace:
+    #    print(f"[fill-debug] success={res.get('success')} steps={res.get('steps', [])}")
+
+    #if trace:
+    #    print(f"[fill-debug] res keys: {list(res.keys())}")
+    #    print(f"[fill-debug] steps: {res.get('steps', [])}")
+    #    print(f"[fill-debug] success: {res.get('success')}")
+
+
     steps = [str(s) for s in res.get("steps", [])]
 
     # Fallbacks: some backends return finishers/applies in separate keys
@@ -128,8 +151,15 @@ def _fill_one_hole(isabelle, session: str, full_text: str, hole_span: Tuple[int,
         insert = "\n  " + "\n  ".join(script_lines) + "\n"
         s, e = hole_span
         new_text = full_text[:s] + insert + full_text[e:]
+<<<<<<< HEAD
         new_text = _strip_post_by_lines(new_text)
 
+=======
+        new_text = re.sub(r'\n\s*\n\s*(by\b|done\b)', r'\n  \1', new_text)
+        new_text = _strip_post_by_lines(new_text)
+   #     if trace:
+   #         print(f"[fill-debug] about to verify, insert={insert!r}")
+>>>>>>> fix/isabelle-client-compatibility
         if _verify_full_proof(isabelle, session, new_text):
             return new_text, True, "\n".join(script_lines)
         return full_text, False, "finisher-unverified"
@@ -408,7 +438,7 @@ def plan_outline(goal: str, *, model: Optional[str] = None, outline_k: Optional[
     """Generate Isar outline with 'sorry' placeholders."""
     server_info, proc = start_isabelle_server(name="planner", log_file="logs/planner_ui.log")
     isa = get_isabelle_client(server_info)
-    session = isa.session_start(session=ISABELLE_SESSION)
+    session = extract_session_id(isa.session_start(session=ISABELLE_SESSION))
     
     try:
         if legacy_single_outline:
@@ -427,7 +457,8 @@ def plan_outline(goal: str, *, model: Optional[str] = None, outline_k: Optional[
     finally:
         _cleanup_resources(isa, proc)
 
-def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *, mode: str = "auto",
+def plan_and_fill(goal: str, model: Optional[str] = None, timeout: float = 240.0, start_time: Optional[float] = None,
+                 *, mode: str = "auto",
                  outline_k: Optional[int] = None, outline_temps: Optional[Iterable[float]] = None,
                  legacy_single_outline: bool = False, repairs: bool = True,
                  max_repairs_per_hole: int = 2, trace: bool = False, repair_trace: bool = False,
@@ -442,12 +473,18 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
       - Repair/verification timeouts or broken Isabelle responses must not crash the caller.
         We treat them as repair failures, and (best-effort) restart Isabelle for subsequent calls.
     """
+    if start_time is None:
+        start_time = time.monotonic()
+
+    def get_time_left():
+        return max(0.0, timeout - (time.monotonic() - start_time)) 
+
     if repair_trace and not trace:
         trace = True
 
     server_info, proc = start_isabelle_server(name="planner", log_file="logs/planner_ui.log")
     isa = get_isabelle_client(server_info)
-    session = isa.session_start(session=ISABELLE_SESSION)
+    session = extract_session_id(isa.session_start(session=ISABELLE_SESSION))
 
     t0 = time.monotonic()
     left_s = lambda: max(0.0, timeout - (time.monotonic() - t0))
@@ -470,7 +507,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
             pass
         server_info2, proc2 = start_isabelle_server(name="planner", log_file="logs/planner_ui.log")
         isa2 = get_isabelle_client(server_info2)
-        session2 = isa2.session_start(session=ISABELLE_SESSION)
+        session2 = extract_session_id(isa2.session_start(session=ISABELLE_SESSION))
         isa, session, proc = isa2, session2, proc2
 
     try:
@@ -502,8 +539,8 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
             except (TimeoutError, _FuturesTimeout, ValueError) as ex:
                 _restart_isabelle("verify_full_proof", ex)
 
-            if repairs and left_s() > 6.0:
-                full, ok = _repair_failed_proof_topdown(isa, session, full, goal, model, left_s, max_repairs_per_hole, trace)
+            if repairs and get_time_left() > 6.0:
+                full, ok = _repair_failed_proof_topdown(isa, session, full, goal, model, get_time_left, max_repairs_per_hole, trace)
                 if ok:
                     return PlanAndFillResult(True, full, [], [])
 
@@ -526,9 +563,25 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
 
         focused_hole_key: Optional[str] = None
 
-        while "sorry" in full and left_s() > 0:
+        while "sorry" in full and get_time_left() > 0:
             spans = find_sorry_spans(full)
             if not spans:
+                try:
+                    if _verify_full_proof(isa, session, full):
+                        if trace:
+                            print("[fill] Victory Lap: Proof is already verified! Exiting loop.")
+                        break 
+                except Exception as ex:
+                    if trace:
+                        print(f"[fill] Victory Lap check failed: {ex}")
+                break
+  
+            
+            current_stage_for_budget = repair_progress.get(focused_hole_key, 0) if focused_hole_key else 0
+            max_budget = 60.0 if current_stage_for_budget >= 2 else 30.0
+            current_repair_budget = min(get_time_left(), max_budget)
+            if current_repair_budget < 5.0:
+                if trace: print("[driver] Global timeout imminent. Stopping")
                 break
 
             span = None
@@ -546,7 +599,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
                 span = spans[0]
 
             hole_key = _hole_fingerprint(full, span)
-            per_hole_budget = int(max(5, left_s() / max(1, len(spans))))
+            per_hole_budget = int(max(5, get_time_left() / max(1, len(spans))))
             start_stage = repair_progress.get(hole_key, 0)
 
             # Always try fill first unless we're in escalated repair stages
@@ -601,7 +654,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
 
             # Try CEGIS repairs
             current_stage = repair_progress.get(hole_key, 0)
-            if current_stage > 0 and repairs and left_s() > 6:
+            if current_stage > 0 and repairs and get_time_left() > 6:
                 try:
                     state = _print_state_before_hole(isa, session, full, span, trace)
                     eff_goal = _effective_goal_from_state(state, goal_text, full, span, trace)
@@ -617,7 +670,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
                     patched, applied, _ = try_cegis_repairs(
                         full_text=full, hole_span=span, goal_text=eff_goal, model=model,
                         isabelle=isa, session=session,
-                        repair_budget_s=min(30.0, max(15.0, left_s() * 0.33)),
+                        repair_budget_s=current_repair_budget,
                         max_ops_to_try=max_repairs_per_hole, beam_k=2,
                         allow_whole_fallback=False, trace=trace, resume_stage=current_stage,
                     )
@@ -662,7 +715,7 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
                             focused_hole_key = hole_key
                             continue
                         else:
-                            regen_budget = min(40.0, max(8.0, left_s() * 0.8))
+                            regen_budget = min(40.0, max(8.0, get_time_left() * 0.8))
                             try:
                                 new_full, ok_re, _ = regenerate_whole_proof(
                                     full_text=full, goal_text=goal_text, model=model,
@@ -714,16 +767,40 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: int = 100, *,
                             print("[repair] Could not open sorries; escalating stage...")
                         if start_stage < 2:
                             repair_progress[hole_key] = 2
+                            if trace:
+                                print(f"[repair] Could not open sorries. Escalating directly to stage 2...")
                             focused_hole_key = hole_key
                         continue
 
                 # No change from repair: count attempt and escalate
+                try:
+                    if _verify_full_proof(isa, session, full):
+                        if trace:
+                            print(f"[repair] No change but proof already verified. Done.")
+                        repair_progress.clear()
+                        stage_tries.clear()
+                        focused_hole_key = None
+                        continue  # will hit the "sorry" not in full check at top, or Victory Lap
+                except Exception:
+                    pass
                 key = (hole_key, start_stage)
                 stage_tries[key] = stage_tries.get(key, 0) + 1
-                if start_stage < 2:
-                    repair_progress[hole_key] = min(start_stage + 1, 2)
+                if start_stage == 1:
+                    STAGE1_CAP = 2
+                    if stage_tries[key] >= STAGE1_CAP:
+                        repair_progress[hole_key] = 2
+                        if trace:
+                            print(f"[repair] Stage 1 no-change cap reached. Escalating to stage 2...")
+                    else:
+                        repair_progress[hole_key] = 1  # stay at stage 1, retry
                     focused_hole_key = hole_key
-                else:
+                elif start_stage == 2:
+                    STAGE2_CAP = 3
+                    if stage_tries[key] >= STAGE2_CAP:
+                        if trace:
+                            print(f"[repair] Stage 2 no-change cap reached. Will regenerate whole proof...")
+                        # leave repair_progress at 2; the patched != full branch handles regen
+                        # but since there's no change, force escalation by bumping past cap
                     repair_progress[hole_key] = 2
                     focused_hole_key = hole_key
 
