@@ -151,15 +151,10 @@ def _fill_one_hole(isabelle, session: str, full_text: str, hole_span: Tuple[int,
         insert = "\n  " + "\n  ".join(script_lines) + "\n"
         s, e = hole_span
         new_text = full_text[:s] + insert + full_text[e:]
-<<<<<<< HEAD
-        new_text = _strip_post_by_lines(new_text)
-
-=======
         new_text = re.sub(r'\n\s*\n\s*(by\b|done\b)', r'\n  \1', new_text)
         new_text = _strip_post_by_lines(new_text)
    #     if trace:
    #         print(f"[fill-debug] about to verify, insert={insert!r}")
->>>>>>> fix/isabelle-client-compatibility
         if _verify_full_proof(isabelle, session, new_text):
             return new_text, True, "\n".join(script_lines)
         return full_text, False, "finisher-unverified"

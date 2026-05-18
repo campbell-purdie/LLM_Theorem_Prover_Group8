@@ -640,7 +640,6 @@ def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: 
                      beam_k: int = 1, allow_whole_fallback: bool = False, trace: bool = False,
                      resume_stage: int = 0) -> Tuple[str, bool, str]:
     t0 = time.monotonic()
-<<<<<<< HEAD
 
     # Early-exit checks before spending repair budget.
     _, errs = _quick_state_and_errors(isabelle, session, full_text)
@@ -657,23 +656,6 @@ def try_cegis_repairs(*, full_text: str, hole_span: Tuple[int, int], goal_text: 
             if trace:
                 print("[repair] No errors detected (sorry suppressing them). Proceeding with repair.")
 
-=======
-    
-    _, errs = _quick_state_and_errors(isabelle, session, full_text)
-    if not errs:
-        if "sorry" not in full_text:
-            if trace:
-                print("[repair] No errors detected in current block. Victory Lap achieved - skipping repair.")
-            thy = build_theory(full_text.splitlines(), add_print_state=False, end_with=None)
-            ok, _ = finished_ok(_run_theory_with_timeout(isabelle, session, thy, timeout_s=_ISA_VERIFY_TIMEOUT_S))
-        #    return full_text, ok, "success:no-errors"
-        #else:
-            if trace:
-                print("[repair] No errors detected (sorry suppressing them). Proceeding with repair anyway.")
-                return full_text, ok, "success:no-errors"
-
-    
->>>>>>> fix/isabelle-client-compatibility
     left = lambda: max(0.0, repair_budget_s - (time.monotonic() - t0))
     current_text = full_text
     state0 = _print_state_before_hole(isabelle, session, current_text, hole_span, trace=trace)
@@ -819,13 +801,8 @@ def _repair_block(current_text: str, lines: List[str], start: int, end: int, goa
         if blk.strip() == block.strip():
             continue
         
-<<<<<<< HEAD
         blk_with_sorry = _replace_failing_tactics_with_sorry(blk, full_text_lines=lines, start_line=start + 1,
                                                              end_line=end + 1, isabelle=isabelle,
-=======
-        blk_with_sorry = _replace_failing_tactics_with_sorry(blk, full_text_lines=lines, start_line=start + 1, 
-                                                             end_line=start + len(blk.splitlines()), isabelle=isabelle, 
->>>>>>> fix/isabelle-client-compatibility
                                                              session=session, trace=trace)
 
         # Re-indent to match the original block's first-line indentation.
