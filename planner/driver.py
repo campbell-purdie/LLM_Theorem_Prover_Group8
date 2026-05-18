@@ -36,8 +36,10 @@ _HEAD_CMD_RE = re.compile(r"^\s*(have|show|obtain)\b")  # local copy to avoid ne
 _ISA_VERIFY_TIMEOUT_S = int(os.getenv("ISABELLE_VERIFY_TIMEOUT_S", "30"))
 
 # Stage caps — configurable via env vars so stage 3 can be forced during testing.
-STAGE1_CAP = int(os.getenv("REPAIR_STAGE1_CAP", "2"))
-STAGE2_CAP = int(os.getenv("REPAIR_STAGE2_CAP", "3"))
+#STAGE1_CAP = int(os.getenv("REPAIR_STAGE1_CAP", "2"))
+#STAGE2_CAP = int(os.getenv("REPAIR_STAGE2_CAP", "3"))
+STAGE1_CAP = int(os.getenv("REPAIR_STAGE1_CAP", "1"))
+STAGE2_CAP = int(os.getenv("REPAIR_STAGE2_CAP", "1"))
 
 @dataclass(slots=True)
 class PlanAndFillResult:
@@ -781,7 +783,6 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: float = 240.0
                 key = (hole_key, start_stage)
                 stage_tries[key] = stage_tries.get(key, 0) + 1
                 if start_stage == 1:
-                    STAGE1_CAP = 2
                     if stage_tries[key] >= STAGE1_CAP:
                         repair_progress[hole_key] = 2
                         if trace:
@@ -790,12 +791,25 @@ def plan_and_fill(goal: str, model: Optional[str] = None, timeout: float = 240.0
                         repair_progress[hole_key] = 1  # stay at stage 1, retry
                     focused_hole_key = hole_key
                 elif start_stage == 2:
-                    STAGE2_CAP = 3
                     if stage_tries[key] >= STAGE2_CAP:
                         if trace:
-                            print(f"[repair] Stage 2 no-change cap reached. Will regenerate whole proof...")
-                        # leave repair_progress at 2; the patched != full branch handles regen
-                        # but since there's no change, force escalation by bumping past cap
+                            print(f"[repair] Stage 2 no-change cap reached. Regenerating whole proof...")
+                        regen_budget = min(40.0, max(8.0, get_time_left() * 0.8))
+                        try:
+                            new_full, ok_re, _ = regenerate_whole_proof(
+                                full_text=full, goal_text=goal_text, model=model,
+                                isabelle=isa, session=session, budget_s=regen_budget,
+                                trace=trace, prior_outline_text=full
+                            )
+                        except Exception as ex:
+                            if trace:
+                                print(f"[repair] regenerate_whole_proof crashed: {type(ex).__name__}: {ex}")
+                            new_full, ok_re = full, False
+                        if ok_re and new_full != full:
+                            full = new_full
+                            repair_progress.clear()
+                            stage_tries.clear()
+                            focused_hole_key = None
                     repair_progress[hole_key] = 2
                     focused_hole_key = hole_key
 
